@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}{{ r.title }} · {{ site.site_name or "Chef" }}{% endblock %}
+{% block content %}
+<article class="recipe" data-slug="{{ r.slug }}">
+<header class="recipe-head">
+  <h1>{% if r.reference.url %}<a class="title-link" href="{{ r.reference.url }}">{{ r.title }}</a>{% else %}{{ r.title }}{% endif %}</h1>
+  <p class="ref">Reference:
+    {% if r.reference.url %}<a href="{{ r.reference.url }}">{{ r.reference.text }}{% if r.reference.url_text and r.reference.url_text != r.reference.text %} — {{ r.reference.url_text }}{% endif %}</a>{% else %}{{ r.reference.text }}{% endif %}
+  </p>
+  <p class="meta"><b>Serves:</b> {{ r.serves }}</p>
+  <p class="meta times"><b>Prep:</b> {{ r.times.prep|fmt_time }} &nbsp;|&nbsp; <b>Cook:</b> {{ r.times.cook|fmt_time }} &nbsp;|&nbsp; <b>Rest:</b> {{ r.times.rest|fmt_time }} &nbsp;|&nbsp; <b>Total:</b> {{ r.times.total|fmt_time }}</p>
+  <div class="no-print actions">
+    <button class="btn add" data-slug="{{ r.slug }}">+ Shopping list</button>
+    <button class="btn" onclick="window.print()">Print</button>
+    {% if site.repo %}<a class="btn" href="https://github.com/{{ site.repo }}/edit/main/recipes/{{ r.slug }}.md">Edit</a>{% endif %}
+    {% if r.drive_doc_id %}<a class="btn" href="https://docs.google.com/document/d/{{ r.drive_doc_id }}/edit">Google Doc</a>{% endif %}
+    <span class="tags">{% for t in r.tags or [] %}<span class="tag">{{ t }}</span>{% endfor %}</span>
+  </div>
+</header>
+
+<table class="ingredients">
+  <thead><tr><th>Measure</th><th>Ingredient</th><th>Prep</th><th>Mise Grouping</th></tr></thead>
+  <tbody>
+  {% for i in r.ingredients %}
+    <tr><td class="measure">{{ i.measure }}</td><td class="item">{% if i.details %}<button type="button" class="item-link" data-item="{{ i.item }}">{{ i.item }}<span class="cam no-print" aria-hidden="true">{{ " 📷" if i.details == "photo" else " ⓘ" }}</span></button>{% else %}{{ i.item }}{% endif %}</td><td class="prep">{{ i.prep }}</td><td class="group">{{ i.group }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<section class="directions">
+  <h2>Directions</h2>
+  {{ r.body_html|safe }}
+  {% if r.techniques %}
+  <div class="techbox">
+    <h3>Technique temperatures</h3>
+    <ul class="small">{% for g in r.techniques %}<li><b>{{ g.term|capitalize }}</b>: {{ g.temp }}{% if g.url %} <a href="{{ g.url }}">ref</a>{% endif %}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+</section>
+
+{% if r.pairs or r.menus %}
+<section class="pairs no-print">
+  {% if r.pairs %}<h2>Pairs well with</h2>
+  <ul>{% for other, why in r.pairs %}<li><a href="{{ other.slug }}.html">{{ other.title }}</a> <span class="muted small">— {{ why }}</span></li>{% endfor %}</ul>{% endif %}
+  {% if r.menus %}<h2>On these menus</h2>
+  <ul>{% for m in r.menus %}<li><a href="../menus.html#{{ m.id }}">{{ m.name }}</a> <span class="muted small">{{ m.occasion }}</span></li>{% endfor %}</ul>{% endif %}
+</section>
+{% endif %}
+<section class="nutrition">
+  <h2>Estimate Nutrition of Whole, Finished Recipe</h2>
+  {% if r.nutrition %}
+  {% set n = r.nutrition %}
+  <table class="nut-totals">
+    <thead><tr><th>Calories</th><th>Protein</th><th>Fat</th></tr></thead>
+    <tbody><tr><td>{{ n.totals.calories|round|int }}</td><td>{{ '%.1f'|format(n.totals.protein_g) }} g</td><td>{{ '%.1f'|format(n.totals.fat_g) }} g</td></tr></tbody>
+  </table>
+  <p class="muted small">Whole recipe as listed. Basis: {{ n.basis }}. Computed {{ n.computed }}.</p>
+  <details class="no-print"><summary>Line items & assumptions</summary>
+  <div class="scroll"><table class="nut-lines small">
+    <thead><tr><th>Ingredient</th><th>Amount</th><th>oz</th><th>Cal</th><th>Protein</th><th>Fat</th><th>Source</th></tr></thead>
+    <tbody>{% for l in n.lines %}
+      <tr><td>{{ l.item }}</td><td>{{ l.amount }}</td><td>{{ l.oz }}</td><td>{{ l.calories|round|int }}</td><td>{{ '%.1f'|format(l.protein_g or 0) }}</td><td>{{ '%.1f'|format(l.fat_g or 0) }}</td><td>{{ l.source }}{% if l.note %} · {{ l.note }}{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  <ul class="small">{% for a in n.assumptions %}<li>{{ a }}</li>{% endfor %}</ul>
+  {% if n.excluded %}<p class="small muted">Excluded: {{ n.excluded|join(', ') }}</p>{% endif %}
+  </details>
+  {% else %}
+  <p class="muted">Not yet calculated.</p>
+  {% endif %}
+</section>
+</article>
+{% endblock %}
+{% block scripts %}<script>Chef.recipePage();</script>{% endblock %}

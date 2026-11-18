@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Build the static site into dist/."""
+import sys, re, json, shutil, pathlib, datetime
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import markdown
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from chef_lib import *
+import html as _html
+
+SITE = ROOT / "site"
+DIST = ROOT / "dist"
+
+
+def md(text):
+    return markdown.markdown(text, extensions=["sane_lists", "tables"])
+
+
+def find_techniques(body_md, glossary, skip=None):
+    """Return glossary entries whose term/aliases appear in the directions (first-use order).
+
+    `skip` is the recipe's `techniques_skip` list: glossary terms to leave out even when a word
+    matches (e.g. "air fryer" matching deep fry)."""
+    low = body_md.lower()
+    skip = {str(t).strip().lower() for t in (skip or [])}
+    found = []
+    for g in glossary:
+        if g["term"].lower() in skip:
+            continue
+        words = [g["term"]] + [a for a in (g.get("aliases") or []) if a]
+        best = None
+        for w in words:
+            w = w.strip().rstrip(",").lower()
+            if not w: continue
+            m = re.search(r"(?<![a-z])" + re.escape(w) + r"(?![a-z])", low)
+            if m and (best is None or m.start() < best):
+                best = m.start()
+        if best is not None:
+            found.append((best, g))
+    found.sort(key=lambda x: x[0])
+    return [g for _, g in found]
+
+
+def load_item_details():
+    """data/items.yaml -> (list, {lowercase name or alias: entry}). Fails the build on a missing photo or a clash."""
+    p = ROOT / "data" / "items.yaml"
+    items = (yaml.safe_load(p.read_text()) or {}).get("items") or [] if p.exists() else []
+    by_name = {}
+    for e in items:
+        if e.get("photo") and not (SITE / "static" / "items" / e["photo"]).exists():
+            sys.exit(f"data/items.yaml: photo for {e['item']!r} not found in site/static/items/{e['photo']}")
+        for n in [e["item"]] + list(e.get("aliases") or []):
+            k = str(n).strip().lower()
+            if k in by_name and by_name[k] is not e:
+                sys.exit(f"data/items.yaml: {n!r} is listed under two items")
+            by_name[k] = e
+    return items, by_name
+
+
+def fmt_time(v):
+    if v is None:
+        return "—"
+    if v >= 60 and v % 60 == 0:
+        return f"{v // 60} hr"
+    if v >= 60:
+        return f"{v // 60} hr {v % 60} min"
+    return f"{v} min"
+
+
+def main():
+    sections = load_sections()
+    recipes = load_all(sections)
+    templates = load_templates()
+    for t in templates:
+        for it in t["items"]:
+            it["section_resolved"] = section_for(it["item"], sections, it.get("section"))
+            it.setdefault("shop", True)
+    by_slug = {r["slug"]: r for r in recipes}
+    items, item_by_name = load_item_details()
+    for r in recipes:
+        for ing in r.get("ingredients") or []:
+            info = item_by_name.get(str(ing.get("item", "")).strip().lower())
+            if info:
+                ing["details"] = "photo" if info.get("photo") else "notes"
+    menus = load_menus()
+    for i, m in enumerate(menus):
+        m["id"] = f"m{i+1}"
+        m["slugs"] = [it["slug"] for it in m["items"] if it.get("slug") in by_slug]
+        for it in m["items"]:
+            if it.get("slug") in by_slug:
+                it["title"] = by_slug[it["slug"]]["title"]
+    pairings = load_pairings()
+    pairs_by = {}
+    for a, b, why in pairings:
+        if a in by_slug and b in by_slug:
+            pairs_by.setdefault(a, []).append((by_slug[b], why))
+            pairs_by.setdefault(b, []).append((by_slug[a], why))
+    glossary = load_techniques()
+    for r in recipes:
+        r["techniques"] = find_techniques(r["body_md"], glossary, r.get("techniques_skip"))
+        r["body_html"] = md(r["body_md"])
+        r["section_order"] = [s["name"] for s in sections]
+        r["pairs"] = pairs_by.get(r["slug"], [])
+        r["menus"] = [m for m in menus if r["slug"] in m["slugs"]]
+
+    env = Environment(loader=FileSystemLoader(SITE / "templates"), autoescape=select_autoescape(["html"]))
+    env.filters["fmt_time"] = fmt_time
+
+    if DIST.exists():
+        shutil.rmtree(DIST)
+    (DIST / "r").mkdir(parents=True)
+    shutil.copytree(SITE / "static", DIST / "static")
+    (DIST / ".nojekyll").write_text("")
+
+    built = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    site = load_site()
+    ctx = dict(recipes=recipes, templates=templates, sections=[s["name"] for s in sections], built=built, menus=menus, site=site)
+
+    (DIST / "index.html").write_text(env.get_template("index.html").render(base="", **ctx), encoding="utf-8")
+    (DIST / "shop.html").write_text(env.get_template("shop.html").render(base="", **ctx), encoding="utf-8")
+    (DIST / "menus.html").write_text(env.get_template("menus.html").render(base="", **ctx), encoding="utf-8")
+    if site.get("submission_email"):
+        (DIST / "contribute.html").write_text(env.get_template("contribute.html").render(base="", **ctx), encoding="utf-8")
+    canonical = load_canonical()
+    for c in canonical:
+        try: c["_eff"] = float(c["efficiency"]) if c.get("efficiency") else 1e9
+        except ValueError: c["_eff"] = 1e9
+    (DIST / "nutrition.html").write_text(env.get_template("nutrition.html").render(base="", canonical=canonical, **ctx), encoding="utf-8")
+    tpl = env.get_template("recipe.html")
+    for r in recipes:
+        (DIST / "r" / f"{r['slug']}.html").write_text(tpl.render(base="../", r=r, **ctx), encoding="utf-8")
+
+    # data for client-side search + shopping list
+    slim = []
+    for r in recipes:
+        slim.append({
+            "slug": r["slug"], "title": r["title"], "tags": r.get("tags") or [], "serves": r.get("serves"),
+            "servings": r.get("servings"), "times": r.get("times") or {},
+            "reference": r.get("reference") or {},
+            "ingredients": [{k: ing.get(k) for k in ("measure", "item", "prep", "group", "qty", "unit", "shop")} | {"section": ing["section_resolved"]}
+                            for ing in (r.get("ingredients") or [])],
+            "nutrition": r.get("nutrition"),
+            "pairs": [p[0]["slug"] for p in r["pairs"]],
+            "text": (r["body_md"] + " " + " ".join(i["item"] for i in r.get("ingredients") or [])).lower(),
+        })
+    (DIST / "recipes.json").write_text(json.dumps({"built": built, "sections": [s["name"] for s in sections],
+                                                   "recipes": slim, "templates": templates, "items": items,
+                                                   "menus": [{"id": m["id"], "name": m["name"], "slugs": m["slugs"], "archived": bool(m.get("archived"))} for m in menus]}, ensure_ascii=False), encoding="utf-8")
+    # map of Google Docs <-> recipes, kept in the repo for humans and for the drive-sync skill
+    rows = ["# Google Doc map", "", "Recipe ↔ Google Doc ↔ site page. Regenerated by scripts/build.py; the source of truth is `drive_doc_id` in each recipe file.", "",
+            "| Recipe | Google Doc | Site | Doc id |", "|---|---|---|---|"]
+    site_url = (site.get("site_url") or "").rstrip("/") + "/"
+    for r in sorted(recipes, key=lambda r: r["title"].lower()):
+        did = r.get("drive_doc_id")
+        doc = f"[open](https://docs.google.com/document/d/{did}/edit)" if did else "none yet"
+        rows.append(f"| {r['title']} | {doc} | [page]({site_url}r/{r['slug']}.html) | `{did or ''}` |")
+    (ROOT / "docs" / "DOC_MAP.md").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    print(f"built {len(recipes)} recipes, {len(templates)} templates -> {DIST}")
+
+
+if __name__ == "__main__":
+    main()
