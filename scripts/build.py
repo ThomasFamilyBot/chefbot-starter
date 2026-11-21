@@ -4,6 +4,7 @@ import sys, re, json, shutil, pathlib, datetime
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import markdown
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from markupsafe import Markup, escape
 from chef_lib import *
 import html as _html
 
@@ -56,6 +57,13 @@ def load_item_details():
     return items, by_name
 
 
+def frac_filter(v):
+    """Jinja filter: escape a value and set its fractions small (see chef_lib.frac_text)."""
+    if v is None or v == "":
+        return ""
+    return Markup(frac_text(str(escape(str(v)))))
+
+
 def fmt_time(v):
     if v is None:
         return "—"
@@ -97,13 +105,14 @@ def main():
     glossary = load_techniques()
     for r in recipes:
         r["techniques"] = find_techniques(r["body_md"], glossary, r.get("techniques_skip"))
-        r["body_html"] = md(r["body_md"])
+        r["body_html"] = frac_html(md(r["body_md"]))
         r["section_order"] = [s["name"] for s in sections]
         r["pairs"] = pairs_by.get(r["slug"], [])
         r["menus"] = [m for m in menus if r["slug"] in m["slugs"]]
 
     env = Environment(loader=FileSystemLoader(SITE / "templates"), autoescape=select_autoescape(["html"]))
     env.filters["fmt_time"] = fmt_time
+    env.filters["frac"] = frac_filter
 
     if DIST.exists():
         shutil.rmtree(DIST)
@@ -113,10 +122,18 @@ def main():
 
     built = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     site = load_site()
-    ctx = dict(recipes=recipes, templates=templates, sections=[s["name"] for s in sections], built=built, menus=menus, site=site)
+    answers, aerrs = load_answers(set(by_slug))
+    if aerrs:
+        sys.exit("answers: " + "; ".join(aerrs))
+    for a in answers:
+        a["body_html"] = frac_html(md(a["body_md"])) if a["body_md"] else ""
+        for lb in a["library"]:
+            lb["title"] = by_slug[lb["slug"]]["title"]
+    ctx = dict(answers=answers, recipes=recipes, templates=templates, sections=[s["name"] for s in sections], built=built, menus=menus, site=site)
 
     (DIST / "index.html").write_text(env.get_template("index.html").render(base="", **ctx), encoding="utf-8")
     (DIST / "shop.html").write_text(env.get_template("shop.html").render(base="", **ctx), encoding="utf-8")
+    (DIST / "ask.html").write_text(env.get_template("ask.html").render(base="", **ctx), encoding="utf-8")
     (DIST / "menus.html").write_text(env.get_template("menus.html").render(base="", **ctx), encoding="utf-8")
     if site.get("submission_email"):
         (DIST / "contribute.html").write_text(env.get_template("contribute.html").render(base="", **ctx), encoding="utf-8")

@@ -216,6 +216,24 @@
     e.preventDefault(); e.stopPropagation(); showItem(b.dataset.item);
   });
 
+  /* ---------- ask page: hand the question to a new Claude session ---------- */
+  function askPage() {
+    updateNav();
+    const q = document.getElementById('ask-q'), go = document.getElementById('ask-go'), st = document.getElementById('ask-status');
+    if (!q || !go) return;
+    const text = () => (go.dataset.prompt || '') + q.value.trim();
+    const sync = () => { const u = go.dataset.url; go.href = q.value.trim() ? u + (u.includes('?') ? '&' : '?') + 'q=' + encodeURIComponent(text()) : u; };
+    try { q.value = sessionStorage.getItem('chef.ask') || ''; } catch {}
+    q.addEventListener('input', () => { sync(); st.textContent = ''; try { sessionStorage.setItem('chef.ask', q.value); } catch {} });
+    sync();
+    // a real link (so a phone can hand it to the Claude app); the copy is the fallback when the app drops the text
+    go.addEventListener('click', e => {
+      if (!q.value.trim()) { e.preventDefault(); q.focus(); st.textContent = 'Type a question first.'; return; }
+      sync();
+      try { navigator.clipboard.writeText(text()).then(() => { st.textContent = 'Question copied. Opening Claude…'; }, () => {}); } catch {}
+    });
+  }
+
   function recipePage() { updateNav(); }
 
   /* ---------- share links ---------- */
@@ -331,7 +349,7 @@
         for (const r of secRows) {
           const li = document.createElement('li');
           li.className = ck[r.key] ? 'done' : '';
-          li.innerHTML = `<label><input type="checkbox" ${ck[r.key] ? 'checked' : ''}> <span class="amt">${esc(r.amount)}</span> ${(info => info ? `<button type="button" class="item-link item" data-item="${esc(r.item)}">${esc(r.item)}<span class="cam no-print" aria-hidden="true">${itemMarker(info)}</span></button>` : `<span class="item">${esc(r.item)}</span>`)(itemInfo(d, r.item))} <span class="from muted small">${esc(r.from.join(', '))}</span></label>`;
+          li.innerHTML = `<label><input type="checkbox" ${ck[r.key] ? 'checked' : ''}> <span class="amt">${Units.fracHTML(esc(r.amount))}</span> ${(info => info ? `<button type="button" class="item-link item" data-item="${esc(r.item)}">${esc(r.item)}<span class="cam no-print" aria-hidden="true">${itemMarker(info)}</span></button>` : `<span class="item">${esc(r.item)}</span>`)(itemInfo(d, r.item))} <span class="from muted small">${esc(r.from.join(', '))}</span></label>`;
           li.querySelector('input').addEventListener('change', e => { const c = checked(); if (e.target.checked) c[r.key] = 1; else delete c[r.key]; setChecked(c); li.classList.toggle('done', e.target.checked); if (hide) render(); });
           ul.appendChild(li);
         }
@@ -356,5 +374,5 @@
     data().then(() => { syncSwitch(); syncPicker(); render(); updateNav(); startPolling(); });
   }
 
-  global.Chef = { indexPage, recipePage, shopPage, menusPage, addMenu, getSel, setSel, data, listName, pull, showItem };
+  global.Chef = { askPage, indexPage, recipePage, shopPage, menusPage, addMenu, getSel, setSel, data, listName, pull, showItem };
 })(window);
