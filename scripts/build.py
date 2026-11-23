@@ -83,6 +83,9 @@ def main():
             it["section_resolved"] = section_for(it["item"], sections, it.get("section"))
             it.setdefault("shop", True)
     by_slug = {r["slug"]: r for r in recipes}
+    for r in recipes:
+        if r.get("variant_of") in by_slug:
+            r["variant_of_title"] = by_slug[r["variant_of"]]["title"]
     items, item_by_name = load_item_details()
     for r in recipes:
         for ing in r.get("ingredients") or []:
@@ -92,7 +95,10 @@ def main():
     menus = load_menus()
     for i, m in enumerate(menus):
         m["id"] = f"m{i+1}"
-        m["slugs"] = [it["slug"] for it in m["items"] if it.get("slug") in by_slug]
+        # slugs: what the menu's shopping button adds. An item with `shop: false` (already made, or bought) is
+        # still listed and linked on the menu, but is left out of the shopping list.
+        m["slugs"] = [it["slug"] for it in m["items"] if it.get("slug") in by_slug and it.get("shop", True)]
+        m["listed"] = [it["slug"] for it in m["items"] if it.get("slug") in by_slug]
         for it in m["items"]:
             if it.get("slug") in by_slug:
                 it["title"] = by_slug[it["slug"]]["title"]
@@ -108,7 +114,7 @@ def main():
         r["body_html"] = frac_html(md(r["body_md"]))
         r["section_order"] = [s["name"] for s in sections]
         r["pairs"] = pairs_by.get(r["slug"], [])
-        r["menus"] = [m for m in menus if r["slug"] in m["slugs"]]
+        r["menus"] = [m for m in menus if r["slug"] in m["listed"]]
 
     env = Environment(loader=FileSystemLoader(SITE / "templates"), autoescape=select_autoescape(["html"]))
     env.filters["fmt_time"] = fmt_time
